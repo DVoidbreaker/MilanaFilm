@@ -27,6 +27,8 @@
 
   let ws = null;
   let roomId = null;
+  let pingTimer = null;
+  let reconnectTimer = null;
   let media = [];
   let selected = null;
   let isRemote = false;
@@ -172,16 +174,38 @@
     roomId = rid;
     roomLabel.textContent = "Комната: " + rid;
     copyLinkBtn.disabled = false;
+    if (pingTimer) clearInterval(pingTimer);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    ws = new WebSocket(`${proto}//${location.host}/ws/${rid}`);
-    ws.onopen = () => setStatus("Подключено", "ok");
-    ws.onclose = () => setStatus("Отключено", "err");
+    try {
+      ws = new WebSocket(`${proto}//${location.host}/ws/${rid}`);
+    } catch (e) {
+      setStatus("Не удалось открыть WebSocket: " + e.message, "err");
+      scheduleReconnect(rid);
+      return;
+    }
+    ws.onopen = () => {
+      setStatus("Подключено", "ok");
+      pingTimer = setInterval(() => {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "ping" }));
+      }, 25000);
+    };
+    ws.onclose = () => {
+      setStatus("Отключено. Переподключение...", "err");
+      if (pingTimer) clearInterval(pingTimer);
+      scheduleReconnect(rid);
+    };
     ws.onerror = () => setStatus("Ошибка соединения", "err");
     ws.onmessage = (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       handleMsg(msg);
     };
+  }
+
+  function scheduleReconnect(rid) {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => connectWS(rid), 4000);
   }
 
   function handleMsg(msg) {

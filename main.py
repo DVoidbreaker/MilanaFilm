@@ -51,6 +51,24 @@ async def extract_media(url: str):
     parsed0 = urlparse(url)
     if any(parsed0.path.lower().endswith(x) for x in (".mp4", ".webm", ".m3u8", ".ogg", ".mov")):
         return [{"type": "video", "src": url, "label": "direct"}], None
+
+    host0 = parsed0.netloc.lower()
+    # YouTube: build embed without fetching the page (avoids 429/bot blocks)
+    if "youtube.com" in host0 or "youtu.be" in host0:
+        vid = None
+        if "youtu.be" in host0:
+            vid = parsed0.path.strip("/").split("/")[0]
+        else:
+            from urllib.parse import parse_qs
+            vid = parse_qs(parsed0.query).get("v", [None])[0]
+        if vid:
+            return [{"type": "iframe", "src": f"https://www.youtube.com/embed/{vid}", "label": "YouTube"}], None
+    # Rutube
+    if "rutube.ru" in host0:
+        m = re.search(r"/video/([a-zA-Z0-9]+)", parsed0.path)
+        if m:
+            return [{"type": "iframe", "src": f"https://rutube.ru/play/embed/{m.group(1)}", "label": "Rutube"}], None
+
     try:
         async with httpx.AsyncClient(follow_redirects=True, timeout=25.0) as client:
             r = await client.get(url, headers={
