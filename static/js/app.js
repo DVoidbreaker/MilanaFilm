@@ -35,6 +35,7 @@
   let duration = 0;
   let ytPlayer = null;
   let ytPoll = null;
+  let roomUrl = null;
 
   function setStatus(text, cls) {
     statusMsg.textContent = text || "";
@@ -83,6 +84,29 @@
     return !!(ytPlayer && iframe.classList.contains("active") && iframe.src.includes("youtube.com/embed"));
   }
 
+  async function loadKinobox(m) {
+    try {
+      const res = await fetch(`https://api.kinobox.tv/api/players?kinopoisk=${encodeURIComponent(m.kinopoisk)}`, {
+        headers: { "Accept": "application/json" }
+      });
+      const data = await res.json();
+      const players = (data && data.data) || [];
+      const p = players.find(x => x && x.iframeUrl) || players[0];
+      if (p && p.iframeUrl) {
+        iframe.src = p.iframeUrl;
+        showIframe();
+        return;
+      }
+    } catch (e) {
+      console.error("kinobox error", e);
+    }
+    // fallback: embed original page (no sync)
+    if (roomUrl) {
+      iframe.src = roomUrl;
+      showIframe();
+    }
+  }
+
   function loadSelected() {
     if (selected === null || !media[selected]) {
       showPlaceholder();
@@ -95,6 +119,10 @@
       showVideo();
       video.src = m.src;
       video.load();
+    } else if (m.type === "kinobox") {
+      if (ytPlayer) { try { ytPlayer.destroy(); } catch(e){} ytPlayer = null; }
+      if (ytPoll) { clearInterval(ytPoll); ytPoll = null; }
+      loadKinobox(m);
     } else {
       if (ytPlayer) { try { ytPlayer.destroy(); } catch(e){} ytPlayer = null; }
       if (ytPoll) { clearInterval(ytPoll); ytPoll = null; }
@@ -212,6 +240,7 @@
     switch (msg.type) {
       case "state":
         if (msg.room) {
+          roomUrl = msg.room.url || roomUrl;
           media = msg.room.media || [];
           selected = msg.room.selected;
           renderMedia();
@@ -221,6 +250,7 @@
         }
         break;
       case "loaded":
+        roomUrl = msg.url || roomUrl;
         media = msg.media || [];
         selected = msg.selected;
         renderMedia();

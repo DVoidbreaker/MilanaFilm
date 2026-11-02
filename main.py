@@ -76,12 +76,19 @@ async def extract_media(url: str):
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "ru,en;q=0.9",
             })
-            r.raise_for_status()
             html = r.text
+            # Some SPA sites return 404/403 but still serve the app shell
+            if r.status_code >= 400 and "<html" not in html.lower() and "<!doctype" not in html.lower():
+                return media, f"Не удалось загрузить страницу: HTTP {r.status_code}"
     except Exception as e:
         return media, f"Не удалось загрузить страницу: {e}"
 
     soup = BeautifulSoup(html, "html.parser")
+
+    # Kinobox (kinogo-like) sites: extract kinopoisk id, frontend will query kinobox API
+    kp = soup.find(attrs={"data-kinopoisk": True})
+    if kp and kp.get("data-kinopoisk"):
+        media.append({"type": "kinobox", "src": "", "label": "Kinobox", "kinopoisk": kp.get("data-kinopoisk")})
 
     # Special handling for known hosts
     parsed_host = urlparse(url)
@@ -173,6 +180,10 @@ async def extract_media(url: str):
     parsed = urlparse(url)
     if not uniq and any(parsed.path.lower().endswith(x) for x in (".mp4", ".webm", ".m3u8", ".ogg", ".mov")):
         uniq.append({"type": "video", "src": url, "label": "direct"})
+
+    # Fallback: embed the original page (works for SPA sites, but no sync control)
+    if not uniq:
+        uniq.append({"type": "iframe", "src": url, "label": "Страница (без синхронизации)"})
 
     return uniq, None
 
