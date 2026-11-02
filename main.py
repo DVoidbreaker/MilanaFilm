@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).parent
-app = FastAPI(title="Дениско пиписко и Милака милашка")
+app = FastAPI(title="Дениско пиписко и Миланка милашка")
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 

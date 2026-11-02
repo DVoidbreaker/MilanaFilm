@@ -11,6 +11,7 @@
   const viewersLabel = $("viewersLabel");
   const fsBtn = $("fsBtn");
   const urlInput = $("urlInput");
+  const sendUrlBtn = $("sendUrlBtn");
   const createRoomBtn = $("createRoomBtn");
   const joinRoomBtn = $("joinRoomBtn");
   const loadInRoomBtn = $("loadInRoomBtn");
@@ -410,6 +411,19 @@
     const u = new URL(location.href);
     navigator.clipboard.writeText(u.toString()).then(() => setStatus("Ссылка скопирована", "ok"));
   });
+
+  function sendUrl() {
+    const url = urlInput.value.trim();
+    if (!url) { setStatus("Введите URL", "err"); return; }
+    if (!ws || ws.readyState !== 1) {
+      createRoomBtn.click();
+    } else {
+      ws.send(JSON.stringify({ type: "load", url }));
+      setStatus("Загружаю...", "");
+    }
+  }
+  if (sendUrlBtn) sendUrlBtn.addEventListener("click", sendUrl);
+  if (urlInput) urlInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendUrl(); });
 
   chatSendBtn.addEventListener("click", sendChat);
   chatInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
