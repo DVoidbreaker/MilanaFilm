@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Дениско пиписко и Милака милашка</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">▶</span>
+        <span class="title">Дениско пиписко и Милака милашка</span>
+      </div>
+      <div class="room-info" id="roomInfo">
+        <span id="roomLabel">Комната не выбрана</span>
+        <button id="copyLinkBtn" class="btn small" disabled>Скопировать ссылку</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="player-section">
+        <div class="video-wrap" id="videoWrap">
+          <div class="placeholder" id="placeholder">
+            <div class="ph-icon">🎬</div>
+            <div class="ph-text">Загрузите фильм по ссылке, чтобы начать</div>
+          </div>
+          <video id="video" playsinline></video>
+          <iframe id="iframe" allow="autoplay; fullscreen; picture-in-picture"></iframe>
+          <div class="overlay-controls">
+            <button id="fsBtn" class="fs-btn" title="Полный экран">⛶</button>
+          </div>
+        </div>
+
+        <div class="controls">
+          <button id="playPauseBtn" class="btn primary" disabled>▶ Play</button>
+          <input type="range" id="seekBar" min="0" max="1000" value="0" step="1" disabled />
+          <span id="timeLabel" class="time">0:00 / 0:00</span>
+          <span id="viewersLabel" class="viewers">👁 0</span>
+        </div>
+      </section>
+
+      <aside class="sidebar">
+        <div class="card">
+          <h3>Комната</h3>
+          <div class="row">
+            <input id="urlInput" type="url" placeholder="https://сайт-с-фильмом/..." />
+          </div>
+          <div class="row">
+            <button id="createRoomBtn" class="btn primary">Создать комнату</button>
+            <button id="joinRoomBtn" class="btn">Войти по ID</button>
+          </div>
+          <div class="row">
+            <button id="loadInRoomBtn" class="btn">Загрузить в текущую комнату</button>
+          </div>
+          <div class="row">
+            <input id="roomIdInput" type="text" placeholder="ID комнаты" />
+          </div>
+          <div id="statusMsg" class="status"></div>
+        </div>
+
+        <div class="card">
+          <h3>Найденные медиа</h3>
+          <div id="mediaList" class="media-list">
+            <div class="empty">Пока ничего не найдено</div>
+          </div>
+        </div>
+
+        <div class="card chat-card">
+          <h3>Чат</h3>
+          <div id="chatLog" class="chat-log"></div>
+          <div class="row">
+            <input id="chatName" type="text" placeholder="Имя" value="Гость" />
+          </div>
+          <div class="row">
+            <input id="chatInput" type="text" placeholder="Сообщение..." />
+            <button id="chatSendBtn" class="btn small">➤</button>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
