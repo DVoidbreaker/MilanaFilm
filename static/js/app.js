@@ -36,6 +36,66 @@
   let ytPlayer = null;
   let ytPoll = null;
   let roomUrl = null;
+  let hls = null;
+  let hlsLibPromise = null;
+
+  function loadHlsLib() {
+    if (window.Hls) return Promise.resolve();
+    if (!hlsLibPromise) {
+      hlsLibPromise = new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js";
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+    return hlsLibPromise;
+  }
+
+  function destroyHls() {
+    if (hls) {
+      try { hls.destroy(); } catch (e) {}
+      hls = null;
+    }
+  }
+
+  function isHlsSrc(src) {
+    return typeof src === "string" && src.toLowerCase().includes("m3u8");
+  }
+
+  // load a video source into <video>, using hls.js for HLS streams
+  function attachVideo(src) {
+    suppressUntil = Date.now() + 800;
+    destroyHls();
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    if (!src) return;
+    if (isHlsSrc(src)) {
+      const proxied = "/api/hls?url=" + encodeURIComponent(src);
+      loadHlsLib().then(() => {
+        if (!window.Hls || !window.Hls.isSupported()) {
+          video.src = proxied;
+          video.load();
+          return;
+        }
+        hls = new window.Hls({ enableWorker: true, lowLatencyMode: false });
+        hls.loadSource(proxied);
+        hls.attachMedia(video);
+        hls.on(window.Hls.Events.ERROR, (_e, data) => {
+          if (data && data.fatal) console.error("hls fatal error", data);
+        });
+      }).catch((e) => {
+        console.error("hls.js load failed", e);
+        video.src = proxied;
+        video.load();
+      });
+    } else {
+      video.src = src;
+      video.load();
+    }
+  }
 
   function setStatus(text, cls) {
     statusMsg.textContent = text || "";
@@ -63,6 +123,7 @@
     placeholder.classList.remove("hidden");
     video.classList.remove("active");
     iframe.classList.remove("active");
+    destroyHls();
     video.pause();
     video.removeAttribute("src");
     iframe.removeAttribute("src");
@@ -117,15 +178,16 @@
       if (ytPlayer) { try { ytPlayer.destroy(); } catch(e){} ytPlayer = null; }
       if (ytPoll) { clearInterval(ytPoll); ytPoll = null; }
       showVideo();
-      video.src = m.src;
-      video.load();
+      attachVideo(m.src);
     } else if (m.type === "kinobox") {
       if (ytPlayer) { try { ytPlayer.destroy(); } catch(e){} ytPlayer = null; }
       if (ytPoll) { clearInterval(ytPoll); ytPoll = null; }
+      destroyHls();
       loadKinobox(m);
     } else {
       if (ytPlayer) { try { ytPlayer.destroy(); } catch(e){} ytPlayer = null; }
       if (ytPoll) { clearInterval(ytPoll); ytPoll = null; }
+      destroyHls();
       if (m.src.includes("youtube.com/embed")) {
         const url = new URL(m.src, location.origin);
         url.searchParams.set("enablejsapi", "1");
@@ -276,10 +338,53 @@
     }
   }
 
+  let pendingState = null;
+  let suppressUntil = 0; // ignore local play/pause/seek events while (re)loading media
+  let lastRemoteTime = null; // last position applied from a remote control message
+  let lastRemoteAt = 0;
+
   function applyState(state, initial) {
-    if (!state) return;
-    if (state.playing !== undefined) {
-      // store
+    if (!state || !initial) return;
+    pendingState = state;
+    applyPendingState();
+  }
+
+  // apply the room state (position + play/pause) once the video is ready
+  function applyPendingState() {
+    if (!pendingState) return;
+    if (!video.classList.contains("active")) { pendingState = null; return; }
+    if (video.readyState < 1) {
+      const onMeta = () => { video.removeEventListener("loadedmetadata", onMeta); applyPendingState(); };
+      video.addEventListener("loadedmetadata", onMeta);
+      return;
+    }
+    const st = Object.assign({}, pendingState);
+    pendingState = null;
+    // the room state is only updated on play/pause/seek events: if playback is
+    // running, compensate the time elapsed since the last event so that a late
+    // joiner starts at the current position, not a stale one
+    if (st.playing && typeof st.updated === "number" && st.updated > 0) {
+      const elapsed = Date.now() / 1000 - st.updated;
+      if (elapsed > 0 && elapsed < 6 * 3600) st.time = (st.time || 0) + elapsed;
+    }
+    isRemote = true;
+    try {
+      if (typeof st.time === "number" && isFinite(st.time) && st.time > 0 &&
+          Math.abs(video.currentTime - st.time) > 2) {
+        lastRemoteTime = st.time;
+        lastRemoteAt = Date.now();
+        video.currentTime = st.time;
+      }
+      if (st.playing) {
+        const p = video.play();
+        if (p && p.catch) p.catch(() => {});
+      } else {
+        video.pause();
+      }
+    } catch (e) {
+      console.error("applyState error", e);
+    } finally {
+      setTimeout(() => { isRemote = false; }, 300);
     }
   }
 
@@ -304,7 +409,10 @@
     if (!video.classList.contains("active")) return;
     isRemote = true;
     try {
-      if (msg.time !== undefined && msg.time !== null) {
+      if (msg.time !== undefined && msg.time !== null &&
+          Math.abs(video.currentTime - msg.time) > 1) {
+        lastRemoteTime = msg.time;
+        lastRemoteAt = Date.now();
         video.currentTime = msg.time;
       }
       if (msg.action === "play") {
@@ -333,21 +441,27 @@
     }
   });
   video.addEventListener("play", () => {
-    if (isRemote) return;
+    if (isRemote || Date.now() < suppressUntil) return;
     if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify({ type: "control", action: "play", time: video.currentTime }));
     }
     playPauseBtn.textContent = "⏸ Pause";
   });
   video.addEventListener("pause", () => {
-    if (isRemote) return;
+    if (isRemote || Date.now() < suppressUntil) return;
     if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify({ type: "control", action: "pause", time: video.currentTime }));
     }
     playPauseBtn.textContent = "▶ Play";
   });
   video.addEventListener("seeked", () => {
-    if (isRemote) return;
+    if (isRemote || Date.now() < suppressUntil) return;
+    // this seek was triggered by a remote control message: do not echo it back
+    // (the remote seeked event can arrive after the isRemote guard expires and
+    // would otherwise create an endless seek broadcast loop)
+    if (lastRemoteTime !== null &&
+        Math.abs(video.currentTime - lastRemoteTime) < 1 &&
+        Date.now() - lastRemoteAt < 5000) return;
     if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify({ type: "control", action: "seek", time: video.currentTime }));
     }
