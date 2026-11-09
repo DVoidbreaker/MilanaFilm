@@ -262,7 +262,7 @@
 
   function connectWS(rid) {
     roomId = rid;
-    roomLabel.textContent = "Комната: " + rid;
+    roomLabel.textContent = "Ты в комнате: " + rid;
     copyLinkBtn.disabled = false;
     if (pingTimer) clearInterval(pingTimer);
     if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -270,22 +270,22 @@
     try {
       ws = new WebSocket(`${proto}//${location.host}/ws/${rid}`);
     } catch (e) {
-      setStatus("Не удалось открыть WebSocket: " + e.message, "err");
+      setStatus("не коннектится: " + e.message, "err");
       scheduleReconnect(rid);
       return;
     }
     ws.onopen = () => {
-      setStatus("Подключено", "ok");
+      setStatus("всё, я тут", "ok");
       pingTimer = setInterval(() => {
         if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "ping" }));
       }, 25000);
     };
     ws.onclose = () => {
-      setStatus("Отключено. Переподключение...", "err");
+      setStatus("отвалилось, ща чиню", "err");
       if (pingTimer) clearInterval(pingTimer);
       scheduleReconnect(rid);
     };
-    ws.onerror = () => setStatus("Ошибка соединения", "err");
+    ws.onerror = () => setStatus("Интернет сдулся", "err");
     ws.onmessage = (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
@@ -325,7 +325,7 @@
           applyState(msg.state, true);
         }
         if (msg.error) setStatus(msg.error, "err");
-        else setStatus("Фильм загружен", "ok");
+        else setStatus("Есть фильм, погнали 🍿", "ok");
         break;
       case "selected":
         selected = msg.index;
@@ -637,8 +637,8 @@
   // room actions
   createRoomBtn.addEventListener("click", async () => {
     const url = urlInput.value.trim();
-    if (!url) { setStatus("Введите URL фильма", "err"); return; }
-    setStatus("Создаю комнату...", "");
+    if (!url) { setStatus("а ссылка где? 🤡", "err"); return; }
+    setStatus("делаю комнату...", "");
     try {
       const res = await fetch("/api/rooms", {
         method: "POST",
@@ -658,47 +658,47 @@
       renderMedia();
       loadSelected();
       if (data.state) applyState(data.state, true);
-      setStatus("Комната создана: " + rid, "ok");
+      setStatus("Комната готова: " + rid, "ok");
     } catch (e) {
-      setStatus("Ошибка: " + e.message, "err");
+      setStatus("ой, всё упало: " + e.message, "err");
     }
   });
 
   joinRoomBtn.addEventListener("click", () => {
     const rid = roomIdInput.value.trim();
-    if (!rid) { setStatus("Введите ID комнаты", "err"); return; }
+    if (!rid) { setStatus("ID дай 🤡", "err"); return; }
     const u = new URL(location.href);
     u.searchParams.set("room", rid);
     history.replaceState(null, "", u.toString());
     connectWS(rid);
-    setStatus("Подключение...", "");
+    setStatus("захожу...", "");
   });
 
   loadInRoomBtn.addEventListener("click", () => {
     const url = urlInput.value.trim();
-    if (!url) { setStatus("Введите URL", "err"); return; }
+    if (!url) { setStatus("Ссылку сначала добавь 👆", "err"); return; }
     if (!ws || ws.readyState !== 1) {
       // create room first
       createRoomBtn.click();
       return;
     }
     ws.send(JSON.stringify({ type: "load", url }));
-    setStatus("Загружаю...", "");
+    setStatus("Тяну фильм...", "");
   });
 
   copyLinkBtn.addEventListener("click", () => {
     const u = new URL(location.href);
-    navigator.clipboard.writeText(u.toString()).then(() => setStatus("Ссылка скопирована", "ok"));
+    navigator.clipboard.writeText(u.toString()).then(() => setStatus("всё, скопировал", "ok"));
   });
 
   function sendUrl() {
     const url = urlInput.value.trim();
-    if (!url) { setStatus("Введите URL", "err"); return; }
+    if (!url) { setStatus("Ссылку сначала добавь 👆", "err"); return; }
     if (!ws || ws.readyState !== 1) {
       createRoomBtn.click();
     } else {
       ws.send(JSON.stringify({ type: "load", url }));
-      setStatus("Загружаю...", "");
+      setStatus("Тяну фильм...", "");
     }
   }
   if (sendUrlBtn) sendUrlBtn.addEventListener("click", sendUrl);

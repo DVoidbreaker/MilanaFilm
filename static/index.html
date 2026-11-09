@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Дениско пиписко и Миланка милашка</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=7" />
+  <link rel="stylesheet" href="/static/css/style.css?v=9" />
 </head>
 <body>
   <div class="app">
@@ -14,8 +14,8 @@
         <span class="title">Дениско пиписко и Миланка милашка</span>
       </div>
       <div class="room-info" id="roomInfo">
-        <span id="roomLabel">Комната не выбрана</span>
-        <button id="copyLinkBtn" class="btn small" disabled>Скопировать ссылку</button>
+        <span id="roomLabel">ты пока нигде не сидишь</span>
+        <button id="copyLinkBtn" class="btn small" disabled>копируй ссылку</button>
       </div>
     </header>
 
@@ -24,7 +24,7 @@
         <div class="video-wrap" id="videoWrap">
           <div class="placeholder" id="placeholder">
             <div class="ph-icon">🎬</div>
-            <div class="ph-text">Загрузите фильм по ссылке, чтобы начать</div>
+            <div class="ph-text">Тупень, сначала добавь ссылку 😏</div>
           </div>
           <video id="video" playsinline></video>
           <iframe id="iframe" allow="autoplay; fullscreen; picture-in-picture"></iframe>
@@ -46,36 +46,36 @@
           <h3>Комната</h3>
           <div class="row">
             <input id="urlInput" type="url" placeholder="https://сайт-с-фильмом/..." />
-            <button id="sendUrlBtn" class="btn primary">Отправить ссылку</button>
+            <button id="sendUrlBtn" class="btn primary">Кинуть ссылку</button>
           </div>
           <div class="row">
-            <button id="createRoomBtn" class="btn primary">Создать комнату</button>
-            <button id="joinRoomBtn" class="btn">Войти по ID</button>
+            <button id="createRoomBtn" class="btn primary">сделать комнату</button>
+            <button id="joinRoomBtn" class="btn">зайти по ID</button>
           </div>
           <div class="row">
-            <button id="loadInRoomBtn" class="btn">Загрузить в текущую комнату</button>
+            <button id="loadInRoomBtn" class="btn">Влить в комнату</button>
           </div>
           <div class="row">
-            <input id="roomIdInput" type="text" placeholder="ID комнаты" />
+            <input id="roomIdInput" type="text" placeholder="ID комнаты сюда" />
           </div>
           <div id="statusMsg" class="status"></div>
         </div>
 
         <div class="card">
-          <h3>Найденные медиа</h3>
+          <h3>Чё нашлось</h3>
           <div id="mediaList" class="media-list">
-            <div class="empty">Пока ничего не найдено</div>
+            <div class="empty">пока нихрена нет 🤷</div>
           </div>
         </div>
 
         <div class="card chat-card">
-          <h3>Чат</h3>
+          <h3>чатик</h3>
           <div id="chatLog" class="chat-log"></div>
           <div class="row">
-            <input id="chatName" type="text" placeholder="Имя" value="Гость" />
+            <input id="chatName" type="text" placeholder="имя (пиши чё хочешь)" value="Гость" />
           </div>
           <div class="row">
-            <input id="chatInput" type="text" placeholder="Сообщение..." />
+            <input id="chatInput" type="text" placeholder="Пиши, не стесняйся..." />
             <button id="chatSendBtn" class="btn small">➤</button>
           </div>
         </div>
@@ -83,6 +83,6 @@
     </main>
   </div>
 
-  <script src="/static/js/app.js?v=7"></script>
+  <script src="/static/js/app.js?v=9"></script>
 </body>
 </html>
