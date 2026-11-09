@@ -3,6 +3,7 @@ import re
 import json
 import time
 import uuid
+import asyncio
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, quote, unquote
 
@@ -34,13 +35,27 @@ def get_or_create_room(room_id: str):
     return rooms[room_id]
 
 
+def effective_position(room):
+    """Authoritative playhead: stored position + time elapsed while playing.
+
+    The server is the single source of truth (like Rave): clients continuously
+    adjust to this value instead of trusting their own local clocks.
+    """
+    s = room["state"]
+    t = s["time"]
+    if s["playing"]:
+        t += time.time() - s["updated"]
+    return s["playing"], t
+
+
 def serialize_room(room):
+    playing, t = effective_position(room)
     return {
         "room_id": room["id"],
         "url": room["url"],
         "media": room["media"],
         "selected": room["selected"],
-        "state": room["state"],
+        "state": {"playing": playing, "time": t, "updated": time.time()},
         "viewers": len(room["clients"]),
     }
 
@@ -296,7 +311,7 @@ async def extract_media(url: str):
 
     # Fallback: embed the original page (works for SPA sites, but no sync control)
     if not uniq:
-        label = "(без синхронизации)"
+        label = "Страница (без синхронизации)"
         if err:
             label += " — " + str(err)
         uniq.append({"type": "iframe", "src": url, "label": label})
@@ -407,6 +422,26 @@ async def get_room(room_id: str):
     return serialize_room(room)
 
 
+@app.on_event("startup")
+async def start_sync_loop():
+    asyncio.create_task(sync_loop())
+
+
+async def sync_loop():
+    """Periodically broadcast the authoritative playhead to every room.
+
+    This is the Rave-style central clock: clients that buffered, stalled or
+    drifted re-align themselves to the server position.
+    """
+    while True:
+        await asyncio.sleep(2.5)
+        for room in list(rooms.values()):
+            if not room["clients"]:
+                continue
+            playing, tm = effective_position(room)
+            await broadcast(room, {"type": "sync", "time": tm, "playing": playing})
+
+
 @app.websocket("/ws/{room_id}")
 async def ws_endpoint(websocket: WebSocket, room_id: str):
     room = get_or_create_room(room_id)
@@ -463,6 +498,12 @@ async def ws_endpoint(websocket: WebSocket, room_id: str):
                     "playing": room["state"]["playing"],
                     "updated": room["state"]["updated"],
                 }, exclude=websocket)
+            elif t == "sync_request":
+                playing, tm = effective_position(room)
+                try:
+                    await websocket.send_json({"type": "sync", "time": tm, "playing": playing})
+                except Exception:
+                    pass
             elif t == "chat":
                 msg = {"type": "chat", "name": data.get("name", "anon"), "text": data.get("text", "")}
                 room["chat"].append(msg)

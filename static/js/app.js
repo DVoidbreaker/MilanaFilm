@@ -307,7 +307,10 @@
           selected = msg.room.selected;
           renderMedia();
           loadSelected();
-          if (msg.room.state) applyState(msg.room.state, true);
+          if (msg.room.state) {
+            noteServerTime(msg.room.state.time, msg.room.state.playing);
+            applyState(msg.room.state, true);
+          }
           if (msg.room.viewers !== undefined) viewersLabel.textContent = "👁 " + msg.room.viewers;
         }
         break;
@@ -317,7 +320,10 @@
         selected = msg.selected;
         renderMedia();
         loadSelected();
-        if (msg.state) applyState(msg.state, true);
+        if (msg.state) {
+          noteServerTime(msg.state.time, msg.state.playing);
+          applyState(msg.state, true);
+        }
         if (msg.error) setStatus(msg.error, "err");
         else setStatus("Фильм загружен", "ok");
         break;
@@ -327,7 +333,12 @@
         loadSelected();
         break;
       case "control":
+        noteServerTime(msg.time, msg.playing);
         applyControl(msg);
+        break;
+      case "sync":
+        noteServerTime(msg.time, msg.playing);
+        applyServerSync();
         break;
       case "presence":
         if (msg.viewers !== undefined) viewersLabel.textContent = "👁 " + msg.viewers;
@@ -342,6 +353,92 @@
   let suppressUntil = 0; // ignore local play/pause/seek events while (re)loading media
   let lastRemoteTime = null; // last position applied from a remote control message
   let lastRemoteAt = 0;
+
+  // --- server-authoritative sync (Rave-style central clock) ---
+  let lastSync = { time: 0, playing: false, at: 0 };
+  let lastLocalActionAt = 0;
+
+  function noteServerTime(t, playing) {
+    lastSync = {
+      time: (typeof t === "number" && isFinite(t)) ? t : 0,
+      playing: !!playing,
+      at: Date.now() / 1000,
+    };
+  }
+
+  // where the room playhead should be right now
+  function expectedNow() {
+    if (!lastSync.playing) return lastSync.time;
+    return lastSync.time + (Date.now() / 1000 - lastSync.at);
+  }
+
+  function requestSync() {
+    if (ws && ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: "sync_request" })); } catch (e) {}
+    }
+  }
+
+  function remoteSeekTo(t) {
+    isRemote = true;
+    lastRemoteTime = t;
+    lastRemoteAt = Date.now();
+    try { video.currentTime = t; } catch (e) {}
+    setTimeout(() => { isRemote = false; }, 100);
+  }
+
+  // align the local player to the authoritative server position
+  function applyServerSync() {
+    if (!lastSync.at) return;
+    if (Date.now() - lastLocalActionAt < 1500) return; // user just acted; next sync will confirm
+    const target = expectedNow();
+    const playing = lastSync.playing;
+    if (isYT()) {
+      if (!ytPlayer || typeof ytPlayer.getCurrentTime !== "function") return;
+      try {
+        const cur = ytPlayer.getCurrentTime() || 0;
+        const st = ytPlayer.getPlayerState();
+        if (playing) {
+          if (Math.abs(cur - target) > 2.5) ytPlayer.seekTo(target, true);
+          if (st !== 1 && st !== 3) ytPlayer.playVideo();
+        } else {
+          if (st === 1) ytPlayer.pauseVideo();
+          if (Math.abs(cur - target) > 2.5) ytPlayer.seekTo(target, true);
+        }
+      } catch (e) {}
+      return;
+    }
+    if (!video.classList.contains("active")) return;
+    if (video.readyState < 1) {
+      // not loaded yet: remember where to start once it is
+      pendingState = { time: target, playing, updated: Date.now() / 1000 };
+      return;
+    }
+    const diff = video.currentTime - target;
+    if (playing) {
+      if (video.paused && video.readyState >= 2) {
+        isRemote = true;
+        try { const p = video.play(); if (p && p.catch) p.catch(() => {}); }
+        finally { setTimeout(() => { isRemote = false; }, 200); }
+      }
+      if (video.paused || video.readyState < 3) return; // still buffering — wait for 'canplay'
+      if (Math.abs(diff) > 2.5) {
+        // way off (long stall, late join): jump to the room position
+        remoteSeekTo(target);
+      } else if (Math.abs(diff) > 0.35) {
+        // small drift: catch up / slow down gently (up to ±8%)
+        video.playbackRate = Math.max(0.92, Math.min(1.08, 1 - diff / 10));
+      } else {
+        video.playbackRate = 1;
+      }
+    } else {
+      video.playbackRate = 1;
+      if (!video.paused) {
+        isRemote = true;
+        try { video.pause(); } finally { setTimeout(() => { isRemote = false; }, 100); }
+      }
+      if (Math.abs(diff) > 2.5 && video.readyState >= 3) remoteSeekTo(target);
+    }
+  }
 
   function applyState(state, initial) {
     if (!state || !initial) return;
@@ -367,6 +464,7 @@
       const elapsed = Date.now() / 1000 - st.updated;
       if (elapsed > 0 && elapsed < 6 * 3600) st.time = (st.time || 0) + elapsed;
     }
+    noteServerTime(st.time, st.playing);
     isRemote = true;
     try {
       if (typeof st.time === "number" && isFinite(st.time) && st.time > 0 &&
@@ -409,6 +507,7 @@
     if (!video.classList.contains("active")) return;
     isRemote = true;
     try {
+      video.playbackRate = 1;
       if (msg.time !== undefined && msg.time !== null &&
           Math.abs(video.currentTime - msg.time) > 1) {
         lastRemoteTime = msg.time;
@@ -445,6 +544,8 @@
     if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify({ type: "control", action: "play", time: video.currentTime }));
     }
+    video.playbackRate = 1;
+    lastLocalActionAt = Date.now();
     playPauseBtn.textContent = "⏸ Pause";
   });
   video.addEventListener("pause", () => {
@@ -452,20 +553,30 @@
     if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify({ type: "control", action: "pause", time: video.currentTime }));
     }
+    lastLocalActionAt = Date.now();
     playPauseBtn.textContent = "▶ Play";
   });
-  video.addEventListener("seeked", () => {
+  // broadcast the seek INTENT immediately (on 'seeking'), not on 'seeked':
+  // a long-distance seek while paused can take many seconds to buffer, and
+  // waiting for 'seeked' would leave everyone else on the old position
+  video.addEventListener("seeking", () => {
     if (isRemote || Date.now() < suppressUntil) return;
-    // this seek was triggered by a remote control message: do not echo it back
-    // (the remote seeked event can arrive after the isRemote guard expires and
-    // would otherwise create an endless seek broadcast loop)
+    // a seek triggered by a remote control message: do not echo it back
     if (lastRemoteTime !== null &&
         Math.abs(video.currentTime - lastRemoteTime) < 1 &&
         Date.now() - lastRemoteAt < 5000) return;
     if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify({ type: "control", action: "seek", time: video.currentTime }));
     }
+    video.playbackRate = 1;
+    lastLocalActionAt = Date.now();
   });
+  video.addEventListener("seeked", () => {
+    video.playbackRate = 1;
+  });
+  // after a stall/buffering pause — realign with the room immediately
+  video.addEventListener("playing", () => { requestSync(); });
+  video.addEventListener("canplay", () => { applyServerSync(); });
 
   playPauseBtn.addEventListener("click", () => {
     if (isYT()) {
