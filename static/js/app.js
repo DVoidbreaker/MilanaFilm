@@ -24,6 +24,10 @@
   const chatName = $("chatName");
   const chatInput = $("chatInput");
   const chatSendBtn = $("chatSendBtn");
+  const micBtn = $("micBtn");
+  const camBtn = $("camBtn");
+  const mixBar = $("mixBar");
+  const camStrip = $("camStrip");
 
   let ws = null;
   let roomId = null;
@@ -241,7 +245,7 @@
   function renderMedia() {
     mediaList.innerHTML = "";
     if (!media.length) {
-      mediaList.innerHTML = '<div class="empty">Пока ничего не найдено</div>';
+      mediaList.innerHTML = '<div class="empty">пока нихрена нет 🤷</div>';
       return;
     }
     media.forEach((m, i) => {
@@ -342,6 +346,21 @@
         break;
       case "presence":
         if (msg.viewers !== undefined) viewersLabel.textContent = "👁 " + msg.viewers;
+        break;
+      case "hello":
+        // WebRTC identity: forget stale peers (e.g. after reconnect) and mesh up
+        Object.keys(rtcPeers).forEach(dropPeer);
+        myCid = msg.id;
+        (msg.peers || []).forEach((pid) => { if (pid !== myCid) createPC(pid); });
+        break;
+      case "peer-joined":
+        if (msg.id && msg.id !== myCid) createPC(msg.id);
+        break;
+      case "peer-left":
+        dropPeer(msg.id);
+        break;
+      case "rtc":
+        if (msg.from && msg.data) handleRTC(msg.from, msg.data);
         break;
       case "chat":
         appendChat(msg.name, msg.text);
@@ -630,6 +649,9 @@
   // double click on video
   video.addEventListener("dblclick", toggleFullscreen);
   document.addEventListener("keydown", (e) => {
+    // don't hijack keys typed into inputs (chat, url, room id)
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
     if (e.key === "f" || e.key === "F") toggleFullscreen();
     if (e.key === " ") { e.preventDefault(); if (!video.disabled) playPauseBtn.click(); }
   });
@@ -721,6 +743,271 @@
   }
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  }
+
+  // ==================== voice / video chat (WebRTC mesh) ====================
+  // Every viewer connects directly to every other viewer. Signaling goes
+  // through the room websocket (server relays "rtc" messages). Glare is
+  // handled with the standard "perfect negotiation" pattern.
+  const RTC_CFG = {
+    iceServers: [
+      { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+    ],
+  };
+
+  let myCid = null;
+  const rtcPeers = {};       // peerId -> RTCPeerConnection
+  let micStream = null;      // local audio capture
+  let camStream = null;      // local camera capture (video only)
+  let micOn = false;
+  let camOn = false;
+  const remoteAudio = {};    // peerId -> hidden <audio> element (voice)
+  const camTiles = {};       // peerId | "local" -> { tile, video }
+  let tileZ = 10;
+
+  function sendRTC(to, payload) {
+    if (ws && ws.readyState === 1) {
+      try { ws.send(JSON.stringify({ type: "rtc", to, data: payload })); } catch (e) {}
+    }
+  }
+
+  function createPC(peerId) {
+    if (rtcPeers[peerId]) return rtcPeers[peerId];
+    const pc = new RTCPeerConnection(RTC_CFG);
+    pc._polite = myCid === null ? true : myCid > peerId; // deterministic side per pair
+    rtcPeers[peerId] = pc;
+
+    pc.onicecandidate = (e) => { if (e.candidate) sendRTC(peerId, { candidate: e.candidate }); };
+    pc.onnegotiationneeded = async () => {
+      try {
+        pc._makingOffer = true;
+        await pc.setLocalDescription();
+        sendRTC(peerId, { description: pc.localDescription });
+      } catch (err) { console.warn("negotiation failed", err); }
+      finally { pc._makingOffer = false; }
+    };
+    pc.ontrack = (e) => onRemoteTrack(peerId, e);
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "failed") {
+        try { pc.close(); } catch (err) {}
+        delete rtcPeers[peerId];
+      }
+    };
+
+    // attach tracks the user already enabled
+    if (micOn && micStream) micStream.getAudioTracks().forEach((tr) => pc.addTrack(tr, micStream));
+    if (camOn && camStream) camStream.getVideoTracks().forEach((tr) => pc.addTrack(tr, camStream));
+    return pc;
+  }
+
+  async function handleRTC(from, data) {
+    const pc = rtcPeers[from] || createPC(from);
+    try {
+      if (data.description) {
+        const desc = data.description;
+        const offerCollision = desc.type === "offer" && (pc._makingOffer || pc.signalingState !== "stable");
+        pc._ignoreOffer = !pc._polite && offerCollision;
+        if (pc._ignoreOffer) return;
+        await pc.setRemoteDescription(desc);
+        if (desc.type === "offer") {
+          await pc.setLocalDescription();
+          sendRTC(from, { description: pc.localDescription });
+        }
+      } else if (data.candidate) {
+        try { await pc.addIceCandidate(data.candidate); }
+        catch (err) { if (!pc._ignoreOffer) console.warn("ice error", err); }
+      }
+    } catch (err) { console.warn("rtc error", err); }
+  }
+
+  function dropPeer(peerId) {
+    const pc = rtcPeers[peerId];
+    if (pc) { try { pc.close(); } catch (e) {} delete rtcPeers[peerId]; }
+    if (remoteAudio[peerId]) { remoteAudio[peerId].remove(); delete remoteAudio[peerId]; }
+    removeTile(peerId);
+  }
+
+  // floating camera tile inside videoWrap (stays visible in fullscreen)
+  function makeTile(id, label) {
+    if (camTiles[id]) return camTiles[id];
+    const tile = document.createElement("div");
+    tile.className = "cam-tile";
+    const n = Object.keys(camTiles).length;
+    tile.style.left = (14 + n * 18) + "px";
+    tile.style.top = (14 + n * 18) + "px";
+    const v = document.createElement("video");
+    v.autoplay = true;
+    v.playsInline = true;
+    const name = document.createElement("div");
+    name.className = "cam-name";
+    name.textContent = label;
+    const grip = document.createElement("div");
+    grip.className = "cam-grip";
+    grip.title = "потянуть — размер";
+    tile.append(v, name, grip);
+    camStrip.appendChild(tile);
+    camTiles[id] = { tile, video: v };
+    makeMovable(tile);
+    return camTiles[id];
+  }
+
+  function removeTile(id) {
+    const t = camTiles[id];
+    if (t) { t.tile.remove(); delete camTiles[id]; }
+  }
+
+  function makeMovable(tile) {
+    // drag the tile around (inside the player area, works in fullscreen too)
+    tile.addEventListener("pointerdown", (e) => {
+      if (e.target.classList.contains("cam-grip")) return;
+      tile.style.zIndex = ++tileZ;
+      const rect = tile.getBoundingClientRect();
+      const host = camStrip.getBoundingClientRect();
+      const dx = e.clientX - rect.left;
+      const dy = e.clientY - rect.top;
+      const move = (ev) => {
+        const x = Math.max(0, Math.min(host.width - rect.width, ev.clientX - host.left - dx));
+        const y = Math.max(0, Math.min(host.height - rect.height, ev.clientY - host.top - dy));
+        tile.style.left = x + "px";
+        tile.style.top = y + "px";
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      e.preventDefault();
+    });
+    // resize from the corner grip
+    const grip = tile.querySelector(".cam-grip");
+    grip.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      const startW = tile.offsetWidth;
+      const startH = tile.offsetHeight;
+      const sx = e.clientX;
+      const sy = e.clientY;
+      const move = (ev) => {
+        const w = Math.max(120, Math.min(560, startW + ev.clientX - sx));
+        const h = Math.max(90, Math.min(420, startH + ev.clientY - sy));
+        tile.style.width = w + "px";
+        tile.style.height = h + "px";
+      };
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      e.preventDefault();
+    });
+  }
+
+  function onRemoteTrack(peerId, e) {
+    const track = e.track;
+    const stream = e.streams[0] || new MediaStream([track]);
+    if (track.kind === "audio") {
+      let el = remoteAudio[peerId];
+      if (!el) {
+        el = document.createElement("audio");
+        el.autoplay = true;
+        document.body.appendChild(el);
+        remoteAudio[peerId] = el;
+        el.volume = mixMicVol();
+      }
+      el.srcObject = stream;
+      el.play().catch(() => {});
+      stream.onremovetrack = () => { el.remove(); delete remoteAudio[peerId]; };
+    } else if (track.kind === "video") {
+      const t = makeTile(peerId, "собеседник");
+      t.video.srcObject = stream;
+      t.video.volume = mixMicVol();
+      t.video.play().catch(() => {});
+      track.onmute = () => t.tile.classList.add("off");
+      track.onunmute = () => t.tile.classList.remove("off");
+      stream.onremovetrack = () => removeTile(peerId);
+    }
+  }
+
+  async function toggleMic() {
+    try {
+      if (!micOn) {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true },
+        });
+        micOn = true;
+        micBtn.classList.add("on");
+        setStatus("микрофон включён, говорят все 🎤", "ok");
+        Object.keys(rtcPeers).forEach((pid) => {
+          micStream.getAudioTracks().forEach((tr) => rtcPeers[pid].addTrack(tr, micStream));
+        });
+      } else {
+        micOn = false;
+        micBtn.classList.remove("on");
+        Object.keys(rtcPeers).forEach((pid) => {
+          const pc = rtcPeers[pid];
+          pc.getSenders().filter((s) => s.track && s.track.kind === "audio")
+            .forEach((s) => { try { pc.removeTrack(s); } catch (err) {} });
+        });
+        micStream.getTracks().forEach((t) => t.stop());
+        micStream = null;
+        setStatus("микрофон выключен", "");
+      }
+    } catch (e) {
+      setStatus("микрофон не даёт: " + e.message, "err");
+    }
+  }
+
+  async function toggleCam() {
+    try {
+      if (!camOn) {
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 } },
+        });
+        camOn = true;
+        camBtn.classList.add("on");
+        // show myself in the corner (muted, no feedback)
+        const t = makeTile("local", "ты");
+        t.video.muted = true;
+        t.video.srcObject = camStream;
+        t.video.play().catch(() => {});
+        setStatus("камера включена 🎥", "ok");
+        Object.keys(rtcPeers).forEach((pid) => {
+          camStream.getVideoTracks().forEach((tr) => rtcPeers[pid].addTrack(tr, camStream));
+        });
+      } else {
+        camOn = false;
+        camBtn.classList.remove("on");
+        Object.keys(rtcPeers).forEach((pid) => {
+          const pc = rtcPeers[pid];
+          pc.getSenders().filter((s) => s.track && s.track.kind === "video")
+            .forEach((s) => { try { pc.removeTrack(s); } catch (err) {} });
+        });
+        camStream.getTracks().forEach((t) => t.stop());
+        camStream = null;
+        removeTile("local");
+        setStatus("камера выключена", "");
+      }
+    } catch (e) {
+      setStatus("камера не даёт: " + e.message, "err");
+    }
+  }
+
+  if (micBtn) micBtn.addEventListener("click", toggleMic);
+  if (camBtn) camBtn.addEventListener("click", toggleCam);
+
+  // ==================== sound balance: movie <-> micro ====================
+  function mixMicVol() { return mixBar ? mixBar.value / 100 : 0.3; }
+  function applyMix() {
+    if (!mixBar) return;
+    const mic = mixBar.value / 100;
+    video.volume = 1 - mic;
+    Object.values(remoteAudio).forEach((el) => { el.volume = mic; });
+    Object.values(camTiles).forEach((t) => { if (t.video && !t.video.muted) t.video.volume = mic; });
+  }
+  if (mixBar) {
+    mixBar.addEventListener("input", applyMix);
+    video.volume = 1 - mixBar.value / 100; // default: movie louder
   }
 
   // auto join from URL

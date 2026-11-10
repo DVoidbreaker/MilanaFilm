@@ -29,7 +29,7 @@ def get_or_create_room(room_id: str):
             "media": [],
             "selected": None,
             "state": {"playing": False, "time": 0.0, "updated": time.time()},
-            "clients": set(),
+            "clients": {},  # websocket -> client id (used for WebRTC relay)
             "chat": [],
         }
     return rooms[room_id]
@@ -329,7 +329,7 @@ async def broadcast(room, msg, exclude=None):
         except Exception:
             dead.append(ws)
     for ws in dead:
-        room["clients"].discard(ws)
+        room["clients"].pop(ws, None)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -446,8 +446,16 @@ async def sync_loop():
 async def ws_endpoint(websocket: WebSocket, room_id: str):
     room = get_or_create_room(room_id)
     await websocket.accept()
-    room["clients"].add(websocket)
+    cid = uuid.uuid4().hex[:8]
+    room["clients"][websocket] = cid
     await websocket.send_json({"type": "state", "room": serialize_room(room)})
+    # give the newcomer its WebRTC identity + the peers already in the room
+    await websocket.send_json({
+        "type": "hello",
+        "id": cid,
+        "peers": [c for wsc, c in room["clients"].items() if wsc is not websocket],
+    })
+    await broadcast(room, {"type": "peer-joined", "id": cid}, exclude=websocket)
     try:
         while True:
             data = await websocket.receive_json()
@@ -508,13 +516,28 @@ async def ws_endpoint(websocket: WebSocket, room_id: str):
                 msg = {"type": "chat", "name": data.get("name", "anon"), "text": data.get("text", "")}
                 room["chat"].append(msg)
                 await broadcast(room, msg)
+            elif t == "rtc":
+                # WebRTC signaling relay (offers / answers / ice candidates)
+                to = data.get("to")
+                target = next((w for w, c in room["clients"].items() if c == to), None)
+                if target is not None:
+                    try:
+                        await target.send_json({
+                            "type": "rtc",
+                            "from": room["clients"].get(websocket, "?"),
+                            "data": data.get("data"),
+                        })
+                    except Exception:
+                        pass
             elif t == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        room["clients"].discard(websocket)
+        left = room["clients"].pop(websocket, None)
         await broadcast(room, {"type": "presence", "viewers": len(room["clients"])})
+        if left:
+            await broadcast(room, {"type": "peer-left", "id": left})
     except Exception as e:
-        room["clients"].discard(websocket)
+        room["clients"].pop(websocket, None)
 
 
 if __name__ == "__main__":
