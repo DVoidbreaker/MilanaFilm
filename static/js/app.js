@@ -844,6 +844,7 @@
     const grip = document.createElement("div");
     grip.className = "cam-grip";
     grip.title = "потянуть — размер";
+    if (id === "local") tile.classList.add("me"); // своё окно — как в зеркале
     tile.append(v, name, grip);
     camStrip.appendChild(tile);
     camTiles[id] = { tile, video: v };

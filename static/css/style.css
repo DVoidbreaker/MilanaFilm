@@ -143,6 +143,9 @@ input:focus { border-color: var(--accent-2); }
 }
 .cam-tile:active { cursor: grabbing; }
 .cam-tile video { width: 100%; height: 100%; object-fit: cover; display: block; background: #111; }
+/* self-view mirrored (like Zoom/Discord "Mirror my video"): feels natural,
+   while the stream sent to others stays unflipped */
+.cam-tile.me video { transform: scaleX(-1); }
 .cam-tile.off video { opacity: .15; }
 .cam-name {
   position: absolute; left: 6px; top: 5px; font-size: 11px; color: #fff;
